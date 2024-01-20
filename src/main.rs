@@ -7,10 +7,37 @@ use winit::{
     keyboard::{Key, NamedKey}
 };
 
-use std::{env, num::NonZeroU32, ops::Add, rc::Rc, time::{Duration, Instant}, path::Path};
+use ffmpeg::{
+    format::{
+        sample::Type as SampleType,
+        Sample as FFmpegSample,
+        input,
+    },
+    frame,
+    media::Type as MediaType,
+};
 
-use image::GenericImageView;
-use image::imageops::FilterType;
+use std::{
+    num::NonZeroU32,
+    ops::Add,
+    rc::Rc,
+    time::{Duration, Instant},
+    path::Path,
+};
+
+use image::{
+    GenericImageView,
+    imageops::FilterType,
+};
+
+use kira::{
+    manager::{
+        AudioManager, AudioManagerSettings,
+        backend::DefaultBackend,
+    },
+    sound::static_sound::{StaticSoundData, StaticSoundSettings},
+    tween::Tween,
+};
 
 const FPS: u32 = 33000000;
 
@@ -18,15 +45,15 @@ fn main() -> Result<(), impl std::error::Error> {
     //ffmpeg setup
     ffmpeg::init().unwrap();
 
-    match ffmpeg::format::input(&std::path::Path::new("src/BadApple.webm")) {
-        Ok(context) => {
-            for (k,v) in context.metadata().iter() {
-                println!("{} : {}", k, v);
-            }
-            println!("{}", context.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
-        }
-        _ => {}
-    }
+    let video_file = Path::new("src/Bad Apple.mp4");
+    let audio_file = Path::new("src/Bad Apple.wav");
+
+    let mut ictx = input(&video_file).unwrap();
+
+    let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
+    let sound_data = StaticSoundData::from_file(audio_file, StaticSoundSettings::new()).unwrap();
+    let sound = manager.play(sound_data).unwrap();
+
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
     let monitor = event_loop.available_monitors().next().expect("No monitor found!");
