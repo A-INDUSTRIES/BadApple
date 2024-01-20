@@ -7,7 +7,7 @@ use winit::{
     keyboard::{Key, NamedKey}
 };
 
-use std::{env, num::NonZeroU32, ops::Add, rc::Rc, time::{Duration, Instant}};
+use std::{env, num::NonZeroU32, ops::Add, rc::Rc, time::{Duration, Instant}, path::Path};
 
 use image::GenericImageView;
 use image::imageops::FilterType;
@@ -18,11 +18,12 @@ fn main() -> Result<(), impl std::error::Error> {
     //ffmpeg setup
     ffmpeg::init().unwrap();
 
-    match ffmpeg::format::input(&env::args().nth(1).expect("Cannot open file.")) {
+    match ffmpeg::format::input(&std::path::Path::new("src/BadApple.webm")) {
         Ok(context) => {
             for (k,v) in context.metadata().iter() {
                 println!("{} : {}", k, v);
             }
+            println!("{}", context.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
         }
         _ => {}
     }
@@ -46,7 +47,7 @@ fn main() -> Result<(), impl std::error::Error> {
     // Softbuffer setup
     let image = image::load_from_memory(include_bytes!("image.png")).unwrap();
     let image = image.resize_to_fill(monitor.size().width, monitor.size().height, FilterType::Nearest);
-    let startpos = (monitor.size().height - image.height())/2;
+    let start_position = (monitor.size().height - image.height())/2;
     let context = softbuffer::Context::new(window.clone()).unwrap();
     let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
 
@@ -79,7 +80,7 @@ fn main() -> Result<(), impl std::error::Error> {
                     WindowEvent::RedrawRequested => {
                         surface.resize(
                             NonZeroU32::new(image.width()).unwrap(),
-                            NonZeroU32::new(image.height() + (startpos * 2)).unwrap(),
+                            NonZeroU32::new(image.height() + (start_position * 2)).unwrap(),
                         ).unwrap();
 
                         let mut buffer = surface.buffer_mut().unwrap();
@@ -89,7 +90,7 @@ fn main() -> Result<(), impl std::error::Error> {
                             if pixel.0[0] > 100 {
                                 r = 255;
                             }
-                            buffer[(startpos + y) as usize * width + x as usize] = r | (r << 8) | (r << 16);
+                            buffer[(start_position + y) as usize * width + x as usize] = r | (r << 8) | (r << 16);
                         }
                         buffer.present().unwrap();
                     },
