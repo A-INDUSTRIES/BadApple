@@ -1,17 +1,4 @@
-#![allow(clippy::single_match)]
 extern crate ffmpeg_next as ffmpeg;
-
-
-use std::{
-    env,
-    sync::Arc,
-    num::NonZeroU32,
-    ops::Add,
-    rc::Rc,
-    time::{Duration, Instant}
-};
-
-use image::GenericImageView;
 
 use winit::{
     event::{Event, KeyEvent, ElementState, StartCause, WindowEvent},
@@ -20,9 +7,25 @@ use winit::{
     keyboard::{Key, NamedKey}
 };
 
+use std::{env, num::NonZeroU32, ops::Add, rc::Rc, time::{Duration, Instant}};
+
+use image::GenericImageView;
+use image::imageops::FilterType;
+
 const FPS: u32 = 33000000;
 
 fn main() -> Result<(), impl std::error::Error> {
+    //ffmpeg setup
+    ffmpeg::init().unwrap();
+
+    match ffmpeg::format::input(&env::args().nth(1).expect("Cannot open file.")) {
+        Ok(context) => {
+            for (k,v) in context.metadata().iter() {
+                println!("{} : {}", k, v);
+            }
+        }
+        _ => {}
+    }
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
     let monitor = event_loop.available_monitors().next().expect("No monitor found!");
@@ -42,10 +45,12 @@ fn main() -> Result<(), impl std::error::Error> {
 
     // Softbuffer setup
     let image = image::load_from_memory(include_bytes!("image.png")).unwrap();
+    let image = image.resize_to_fill(monitor.size().width, monitor.size().height, FilterType::Nearest);
+    let startpos = (monitor.size().height - image.height())/2;
     let context = softbuffer::Context::new(window.clone()).unwrap();
     let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
 
-    let mut start = Instant::now();
+    //let start = Instant::now();
 
     event_loop.run(move |event, elwt| {
             match event {
@@ -55,14 +60,7 @@ fn main() -> Result<(), impl std::error::Error> {
                             .add(Duration::new(0, FPS))
                     ));},
                 Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
-                    /*elwt
-                    .set_control_flow(
-                        ControlFlow::WaitUntil(Instant::now()
-                            .add(Duration::new(0, FPS))
-                    ));*/
-                    window.request_redraw();
-                    println!("{:?}", start.elapsed());
-                    start = Instant::now()},
+                    window.request_redraw()},
                 Event::WindowEvent {event, ..} => {
                     match event{
                     WindowEvent::CloseRequested => {elwt.exit()},
@@ -78,10 +76,10 @@ fn main() -> Result<(), impl std::error::Error> {
                         Key::Named(NamedKey::Escape) => elwt.exit(),
                         _ => {}
                     },
-                        WindowEvent::RedrawRequested => {
+                    WindowEvent::RedrawRequested => {
                         surface.resize(
                             NonZeroU32::new(image.width()).unwrap(),
-                            NonZeroU32::new(image.height()).unwrap(),
+                            NonZeroU32::new(image.height() + (startpos * 2)).unwrap(),
                         ).unwrap();
 
                         let mut buffer = surface.buffer_mut().unwrap();
@@ -91,7 +89,7 @@ fn main() -> Result<(), impl std::error::Error> {
                             if pixel.0[0] > 100 {
                                 r = 255;
                             }
-                            buffer[y as usize * width + x as usize] = r | (r << 8) | (r << 16);
+                            buffer[(startpos + y) as usize * width + x as usize] = r | (r << 8) | (r << 16);
                         }
                         buffer.present().unwrap();
                     },
