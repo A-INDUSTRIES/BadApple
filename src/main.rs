@@ -21,6 +21,7 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
     path::Path,
+    env::current_dir
 };
 use ffmpeg::frame::Video;
 
@@ -34,8 +35,10 @@ use kira::{
 };
 
 fn main() -> Result<(), impl std::error::Error> {
-    let video_file = Path::new("BadApple.webm");
-    let audio_file = Path::new("BadApple.wav");
+    let exec_path = current_dir().unwrap();
+    let folder = exec_path.to_str().unwrap();
+    let video_file = Path::new(folder).join("BadApple.webm");
+    let audio_file = Path::new(folder).join("BadApple.wav");
 
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
