@@ -3,32 +3,26 @@ extern crate ffmpeg_next as ffmpeg;
 use winit::{
     event::{Event, KeyEvent, ElementState, StartCause, WindowEvent},
     event_loop::{EventLoop, ControlFlow},
-    window::{WindowBuilder, Fullscreen},
+    window::{WindowBuilder, Fullscreen, WindowLevel},
     keyboard::{Key, NamedKey}
 };
 
 use ffmpeg::{
+    codec,
     format::{
-        sample::Type as SampleType,
-        Sample as FFmpegSample,
         input,
+        Pixel
     },
-    frame,
-    media::Type as MediaType,
-};
+    media::Type,
+    software::scaling::{context::Context, flag::Flags}};
 
 use std::{
     num::NonZeroU32,
-    ops::Add,
     rc::Rc,
     time::{Duration, Instant},
     path::Path,
 };
-
-use image::{
-    GenericImageView,
-    imageops::FilterType,
-};
+use ffmpeg::frame::Video;
 
 use kira::{
     manager::{
@@ -39,20 +33,9 @@ use kira::{
     tween::Tween,
 };
 
-const FPS: u32 = 33000000;
-
 fn main() -> Result<(), impl std::error::Error> {
-    //ffmpeg setup
-    ffmpeg::init().unwrap();
-
-    let video_file = Path::new("src/Bad Apple.mp4");
-    let audio_file = Path::new("src/Bad Apple.wav");
-
-    let mut ictx = input(&video_file).unwrap();
-
-    let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let sound_data = StaticSoundData::from_file(audio_file, StaticSoundSettings::new()).unwrap();
-    let sound = manager.play(sound_data).unwrap();
+    let video_file = Path::new("BadApple.webm");
+    let audio_file = Path::new("BadApple.wav");
 
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
@@ -60,71 +43,119 @@ fn main() -> Result<(), impl std::error::Error> {
 
     let window = Rc::new(
         WindowBuilder::new()
-        .with_decorations(false)
-        .with_transparent(true)
-        .with_resizable(true)
-        .build(&event_loop)
-        .unwrap(),
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(true)
+            .with_window_level(WindowLevel::AlwaysOnTop)
+            .build(&event_loop)
+            .unwrap(),
     );
 
     let fullscreen = Some(Fullscreen::Borderless(Some(monitor.clone())));
     window.set_fullscreen(fullscreen);
     window.set_title("Bad Apple!");
+    window.set_cursor_hittest(false).unwrap();
+
+    //ffmpeg setup
+    ffmpeg::init().unwrap();
+    let mut input = input(&video_file).unwrap();
+    let video_stream = input.streams().best(Type::Video).unwrap();
+    let video_stream_index = video_stream.index();
+
+    let context_decoder = codec::context::Context::from_parameters(video_stream.parameters()).unwrap();
+    let mut decoder = context_decoder.decoder().video().unwrap();
+
+    let mut scaler = Context::get(
+        decoder.format(),
+        decoder.width(),
+        decoder.height(),
+        Pixel::RGB24,
+        monitor.size().width,
+        monitor.size().height,
+        Flags::BILINEAR,
+    ).unwrap();
+
+    let fps = video_stream.avg_frame_rate().invert();
+    let fps = (fps.numerator() as f64) / (fps.denominator() as f64);
+    let fps = (fps * 1000000000.0) as u64;
+    let fps = Duration::from_nanos(fps);
+
+    let mut packet_iter = input.packets().into_iter();
+
+    //Kira setup
+    let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
+    let sound_data = StaticSoundData::from_file(audio_file, StaticSoundSettings::new()).unwrap();
+    let mut sound = manager.play(sound_data).unwrap();
+    sound.pause(Tween::default()).expect("Could not pause");
+    sound.set_volume(0.1, Tween::default()).unwrap();
 
     // Softbuffer setup
-    let image = image::load_from_memory(include_bytes!("image.png")).unwrap();
-    let image = image.resize_to_fill(monitor.size().width, monitor.size().height, FilterType::Nearest);
-    let start_position = (monitor.size().height - image.height())/2;
     let context = softbuffer::Context::new(window.clone()).unwrap();
     let mut surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
 
-    //let start = Instant::now();
+    let mut start = Instant::now();
 
     event_loop.run(move |event, elwt| {
-            match event {
-                Event::NewEvents(StartCause::Init) => {elwt
-                    .set_control_flow(
-                        ControlFlow::WaitUntil(Instant::now()
-                            .add(Duration::new(0, FPS))
-                    ));},
-                Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
-                    window.request_redraw()},
-                Event::WindowEvent {event, ..} => {
-                    match event{
+        match event {
+            Event::NewEvents(StartCause::Init) => {
+                elwt.set_control_flow(ControlFlow::Poll);
+                surface.resize(
+                    NonZeroU32::new(monitor.size().width).unwrap(),
+                    NonZeroU32::new(monitor.size().height).unwrap(),
+                ).unwrap();
+                sound.resume(Tween::default()).unwrap_or(());},
+            Event::NewEvents(StartCause::Poll) => {
+                if start.elapsed() >= fps {
+                    window.request_redraw();
+                    start = Instant::now();
+                }
+            },
+            Event::WindowEvent {event, ..} => {
+                match event{
                     WindowEvent::CloseRequested => {elwt.exit()},
                     WindowEvent::KeyboardInput {
                         event:
-                            KeyEvent {
-                                logical_key: key,
-                                state: ElementState::Pressed,
-                                ..
-                            },
+                        KeyEvent {
+                            logical_key: key,
+                            state: ElementState::Pressed,
                             ..
-                        } => match key {
+                        },
+                        ..
+                    } => match key {
                         Key::Named(NamedKey::Escape) => elwt.exit(),
                         _ => {}
                     },
                     WindowEvent::RedrawRequested => {
-                        surface.resize(
-                            NonZeroU32::new(image.width()).unwrap(),
-                            NonZeroU32::new(image.height() + (start_position * 2)).unwrap(),
-                        ).unwrap();
+                        loop {
+                            if let Some((stream, packet)) = packet_iter.next(){
+                                if stream.index() == video_stream_index {
+                                    decoder.send_packet(&packet).unwrap();
+                                    break;
+                                }
+                            }
+                            else {
+                                elwt.exit();
+                                break;
+                            }
+                        }
+                        let mut decoded = Video::empty();
+                        decoder.receive_frame(&mut decoded).unwrap();
+                        let mut rgb_frame = Video::empty();
+                        scaler.run(&decoded, &mut rgb_frame).unwrap();
 
                         let mut buffer = surface.buffer_mut().unwrap();
-                        let width = image.width() as usize;
-                        for (x,y,pixel) in image.pixels() {
-                            let mut r:u32 = 0;
-                            if pixel.0[0] > 100 {
-                                r = 255;
-                            }
-                            buffer[(start_position + y) as usize * width + x as usize] = r | (r << 8) | (r << 16);
+                        let data = rgb_frame.data(0);
+
+                        for i in 0..(rgb_frame.width() * rgb_frame.height()) {
+                            let r= data[i as usize * 3usize] as u32;
+                            buffer[i as usize] = r | (r << 8) | (r << 16);
                         }
                         buffer.present().unwrap();
                     },
-                        _ => {}
-                    }
+                    _ => {}
                 }
-                _ => {}
             }
+            _ => {}
+        }
     })
 }
