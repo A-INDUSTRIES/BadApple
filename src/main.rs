@@ -27,7 +27,6 @@ use std::{
     env,
     thread,
     sync::{Arc, Mutex},
-    thread::sleep
 };
 
 use kira::{
@@ -142,7 +141,6 @@ fn main() -> Result<(), impl std::error::Error> {
         }
     });
 
-    sleep(Duration::from_secs(1));
     let mut start = Instant::now();
     let mut is_playing = false;
 
@@ -178,7 +176,7 @@ fn main() -> Result<(), impl std::error::Error> {
                     },
                     WindowEvent::RedrawRequested => {
                         let mut content = frames.lock().unwrap();
-                        if content.frames.len() != 0 {
+                        if content.frames.len() != 0 && content.frames.len() > 49 {
                             let mut buffer = surface.buffer_mut().unwrap();
                             let data = content.frames[0].data(0);
                             for i in 0..(content.frames[0].width() * content.frames[0].height()) {
@@ -189,16 +187,15 @@ fn main() -> Result<(), impl std::error::Error> {
                             }
                             buffer.present().unwrap();
                             content.frames.remove(0);
-                        } else {
+                            if !is_playing {
+                                let sound_data = StaticSoundData::from_file(&audio_file, StaticSoundSettings::new()).unwrap();
+                                let mut sound = manager.play(sound_data).unwrap();
+                                sound.set_volume(0.1, Tween::default()).unwrap();
+                                is_playing = true;
+                            }
+                        } else if is_playing {
                             elwt.exit();
                         }
-                        if !is_playing {
-                            let sound_data = StaticSoundData::from_file(&audio_file, StaticSoundSettings::new()).unwrap();
-                            let mut sound = manager.play(sound_data).unwrap();
-                            sound.set_volume(0.1, Tween::default()).unwrap();
-                            is_playing = true;
-                        }
-
                     },
                     _ => {}
                 }
