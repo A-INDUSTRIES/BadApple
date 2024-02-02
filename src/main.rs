@@ -56,13 +56,16 @@ impl SampleFormatConversion for SampleFormat {
 }
 
 fn main() -> Result<(), impl std::error::Error> {
+    let (file, monitor_index) = parse_args();
     let exec_path = env::current_dir().unwrap();
     let folder = exec_path.to_str().unwrap();
-    let video_file = Path::new(folder).join(env::args().nth(1).unwrap_or("BadApple.webm".parse().unwrap()));
+    let video_file = Path::new(folder).join(file);
 
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
-    let monitor = event_loop.available_monitors().next().expect("No monitor found!");
+    let monitor = event_loop.available_monitors()
+        .nth(monitor_index)
+        .expect("No monitor found!");
     let fullscreen = Some(Fullscreen::Borderless(Some(monitor.clone())));
 
     let window = Rc::new(
@@ -152,6 +155,18 @@ fn main() -> Result<(), impl std::error::Error> {
             _ => {}
         }
     })
+}
+
+fn parse_args() -> (String, usize) {
+    let mut file = String::from("BadApple.webm");
+    let mut monitor = 0;
+    for arg in env::args().into_iter().skip(1) {
+        match arg.parse::<usize>() {
+            Ok(string) => monitor = string,
+            Err(..) => file = arg,
+        }
+    }
+    (file, monitor)
 }
 
 fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<Mutex<Duration>>, width: u32, height: u32) {
