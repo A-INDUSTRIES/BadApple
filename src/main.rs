@@ -31,9 +31,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use cpal::{
-    traits::{DeviceTrait,
-             HostTrait,
-             StreamTrait},
+    traits::{DeviceTrait, HostTrait, StreamTrait},
     Sample,
     SampleFormat
 };
@@ -145,7 +143,7 @@ fn main() -> Result<(), impl std::error::Error> {
                                 *is_playing.lock().unwrap() = true;
                             }
                         } else if *is_playing.lock().unwrap() {
-                            elwt.exit();
+                            elwt.exit(); // If there are no more frames to present, exits the app.
                         }
                     },
                     _ => {}
