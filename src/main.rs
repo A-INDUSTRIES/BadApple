@@ -18,7 +18,8 @@ use ffmpeg::{
     media::Type,
     software::scaling::{context::Context, flag::Flags},
     software::resampling::{context::Context as ResamplingContext},
-    frame::{Video, Audio}
+    frame::{Video, Audio},
+    util::color::Range
 };
 
 use std::{
@@ -129,17 +130,18 @@ fn main() -> Result<(), impl std::error::Error> {
                         Key::Named(NamedKey::Escape) => elwt.exit(),
                         _ => {}
                     },
-                    WindowEvent::RedrawRequested => {
+                    WindowEvent::RedrawRequested => unsafe {
                         let mut content = frames.lock().unwrap();
                         if content.len() != 0 && content.len() > 69 {
                             let mut buffer = surface.buffer_mut().unwrap();
                             let data = content[0].data(0);
-                            for i in 0..(content[0].width() * content[0].height()) {
-                                let r = data[i as usize * 3usize] as u32;
-                                let g = data[i as usize * 3usize + 1usize] as u32;
-                                let b = data[i as usize * 3usize + 2usize] as u32;
-                                buffer[i as usize] = b | (g << 8) | (r << 16);
-                            }
+                            buffer.copy_from_slice(data.align_to::<u32>().1);
+                            /*for i in 0..(content[0].width() * content[0].height()) as usize {
+                                let r = data[i*4 + 1] as u32;
+                                let g = data[i*4 + 2] as u32;
+                                let b = data[i*4 + 3] as u32;
+                                buffer[i as usize] = (r << 16) | (g << 8) | b;
+                            }*/
                             buffer.present().unwrap();
                             content.remove(0);
                             if !*is_playing.lock().unwrap() {
@@ -202,10 +204,10 @@ fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<M
             decoder.format(),
             decoder.width(),
             decoder.height(),
-            Pixel::RGB24,
+            Pixel::BGRA,
             width,
             height,
-            Flags::FAST_BILINEAR,
+            Flags::DIRECT_BGR,
         ).unwrap();
 
         let mut packet_iter = input.packets().into_iter();
