@@ -11,6 +11,6 @@ opt-level = 1
 [dependencies]
 winit = "0.29.10"
 softbuffer = "0.4.1"
-ffmpeg-next = "6.1.1"
-cpal = "0.15.2"
+ffmpeg-next = "7.0.0"
+cpal = "0.15.3"
 ringbuf = "0.2.6"

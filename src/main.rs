@@ -1,42 +1,38 @@
 extern crate ffmpeg_next as ffmpeg;
 
 use winit::{
-    event::{Event, KeyEvent, ElementState, StartCause, WindowEvent},
-    event_loop::{EventLoop, ControlFlow},
-    window::{WindowBuilder, Fullscreen, WindowLevel},
-    keyboard::{Key, NamedKey}
+    event::{ElementState, Event, KeyEvent, StartCause, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    keyboard::{Key, NamedKey},
+    window::{Fullscreen, WindowBuilder, WindowLevel},
 };
 
 use ffmpeg::{
-    codec,
-    format::{
-        input,
-        Pixel,
-        Sample as ffSample,
-        sample::Type as SampleType
-    },
+    codec::{self, audio},
+    format::{input, sample::Type as SampleType, Pixel, Sample as ffSample},
+    frame::{Audio, Video},
     media::Type,
-    software::scaling::{context::Context, flag::Flags},
-    software::resampling::{context::Context as ResamplingContext},
-    frame::{Video, Audio}
+    software::{
+        resampling::context::Context as ResamplingContext,
+        scaling::{context::Context, flag::Flags},
+    },
 };
 
-use std::{
-    num::NonZeroU32,
-    rc::Rc,
-    time::{Duration, Instant},
-    path::{Path, PathBuf},
-    env,
-    thread,
-    sync::{Arc, Mutex},
-};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Sample,
-    SampleFormat
+    FromSample, Sample, SampleFormat,
+};
+use std::{
+    env,
+    num::NonZeroU32,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
 
-use ringbuf::RingBuffer;
+use ringbuf::{Consumer, RingBuffer};
 
 trait SampleFormatConversion {
     fn as_ffmpeg_sample(&self) -> ffSample;
@@ -48,9 +44,9 @@ impl SampleFormatConversion for SampleFormat {
             Self::I16 => ffSample::I16(SampleType::Packed),
             Self::U16 => {
                 panic!("ffmpeg resampler doesn't support u16")
-            },
+            }
             Self::F32 => ffSample::F32(SampleType::Packed),
-            _ => ffSample::U8(SampleType::Packed)
+            _ => ffSample::U8(SampleType::Packed),
         }
     }
 }
@@ -63,7 +59,8 @@ fn main() -> Result<(), impl std::error::Error> {
 
     // Winit setup
     let event_loop = EventLoop::new().unwrap();
-    let monitor = event_loop.available_monitors()
+    let monitor = event_loop
+        .available_monitors()
         .nth(monitor_index)
         .expect("No monitor found!");
     let fullscreen = Some(Fullscreen::Borderless(Some(monitor.clone())));
@@ -91,7 +88,7 @@ fn main() -> Result<(), impl std::error::Error> {
     run_audio_thread(&video_file, thread_playing);
 
     //Frame thread setup
-    let fps = Arc::new(Mutex::new(Duration::new(0,0)));
+    let fps = Arc::new(Mutex::new(Duration::new(0, 0)));
     let frames = Arc::new(Mutex::new(Vec::new()));
     let thread_width = monitor.size().width;
     let thread_height = monitor.size().height;
@@ -103,27 +100,30 @@ fn main() -> Result<(), impl std::error::Error> {
         match event {
             Event::NewEvents(StartCause::Init) => {
                 elwt.set_control_flow(ControlFlow::Poll);
-                surface.resize(
-                    NonZeroU32::new(monitor.size().width).unwrap(),
-                    NonZeroU32::new(monitor.size().height).unwrap(),
-                ).unwrap();},
+                surface
+                    .resize(
+                        NonZeroU32::new(monitor.size().width).unwrap(),
+                        NonZeroU32::new(monitor.size().height).unwrap(),
+                    )
+                    .unwrap();
+            }
             Event::NewEvents(StartCause::Poll) => {
                 let elapsed = start.elapsed();
                 if elapsed >= *fps.lock().unwrap() {
                     start = Instant::now();
                     window.request_redraw();
                 }
-            },
-            Event::WindowEvent {event, ..} => {
-                match event{
-                    WindowEvent::CloseRequested => {elwt.exit()},
+            }
+            Event::WindowEvent { event, .. } => {
+                match event {
+                    WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::KeyboardInput {
                         event:
-                        KeyEvent {
-                            logical_key: key,
-                            state: ElementState::Pressed,
-                            ..
-                        },
+                            KeyEvent {
+                                logical_key: key,
+                                state: ElementState::Pressed,
+                                ..
+                            },
                         ..
                     } => match key {
                         Key::Named(NamedKey::Escape) => elwt.exit(),
@@ -148,7 +148,7 @@ fn main() -> Result<(), impl std::error::Error> {
                         } else if *is_playing.lock().unwrap() {
                             elwt.exit(); // If there are no more frames to present, exits the app.
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -160,7 +160,7 @@ fn main() -> Result<(), impl std::error::Error> {
 fn parse_args() -> (String, usize) {
     let mut file = String::from("BadApple.webm");
     let mut monitor = 0;
-    for arg in env::args().into_iter().skip(1) {
+    for arg in env::args().skip(1) {
         match arg.parse::<usize>() {
             Ok(string) => monitor = string,
             Err(..) => file = arg,
@@ -169,7 +169,13 @@ fn parse_args() -> (String, usize) {
     (file, monitor)
 }
 
-fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<Mutex<Duration>>, width: u32, height: u32) {
+fn run_frame_thread(
+    file: &PathBuf,
+    frames: &Arc<Mutex<Vec<Video>>>,
+    fps: &Arc<Mutex<Duration>>,
+    width: u32,
+    height: u32,
+) {
     let file = file.clone();
     let frames = frames.clone();
     let fps = fps.clone();
@@ -181,7 +187,8 @@ fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<M
         let video_stream = input.streams().best(Type::Video).unwrap();
         let video_stream_index = video_stream.index();
 
-        let context_decoder = codec::context::Context::from_parameters(video_stream.parameters()).unwrap();
+        let context_decoder =
+            codec::context::Context::from_parameters(video_stream.parameters()).unwrap();
 
         let mut fps = fps.lock().unwrap();
         let rate = video_stream.avg_frame_rate();
@@ -195,7 +202,6 @@ fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<M
         decoder.set_threading(ffmpeg::threading::Config {
             kind: ffmpeg::threading::Type::Frame,
             count: 4,
-            safe: false,
         });
 
         let mut scaler = Context::get(
@@ -206,14 +212,15 @@ fn run_frame_thread(file: &PathBuf, frames: &Arc<Mutex<Vec<Video>>>, fps: &Arc<M
             width,
             height,
             Flags::FAST_BILINEAR,
-        ).unwrap();
+        )
+        .unwrap();
 
-        let mut packet_iter = input.packets().into_iter();
+        let mut packet_iter = input.packets();
 
         loop {
             let mut content = frames.lock().unwrap();
             if content.len() <= 70 {
-                if let Some((stream, packet)) = packet_iter.next(){
+                if let Some((stream, packet)) = packet_iter.next() {
                     if stream.index() == video_stream_index {
                         decoder.send_packet(&packet).unwrap();
                         let mut decoded = Video::empty();
@@ -236,7 +243,10 @@ fn run_audio_thread(file: &PathBuf, is_playing: Arc<Mutex<bool>>) {
     let host = cpal::default_host();
     let device = host.default_output_device().unwrap();
     let mut supported_configs_range = device.supported_output_configs().unwrap();
-    let supported_config = supported_configs_range.next().unwrap().with_max_sample_rate();
+    let supported_config = supported_configs_range
+        .next()
+        .unwrap()
+        .with_max_sample_rate();
 
     let file = file.clone();
     let stream_config = supported_config.clone();
@@ -249,10 +259,12 @@ fn run_audio_thread(file: &PathBuf, is_playing: Arc<Mutex<bool>>) {
         let audio = ictx
             .streams()
             .best(Type::Audio)
-            .ok_or(ffmpeg::Error::StreamNotFound).unwrap();
+            .ok_or(ffmpeg::Error::StreamNotFound)
+            .unwrap();
         let audio_stream_index = audio.index();
 
-        let mut audio_decoder = audio.codec().decoder().audio().unwrap();
+        let audio_context = codec::Context::from_parameters(audio.parameters()).unwrap();
+        let mut audio_decoder = audio_context.decoder().audio().unwrap();
 
         let mut resampler = ResamplingContext::get(
             audio_decoder.format(),
@@ -260,22 +272,14 @@ fn run_audio_thread(file: &PathBuf, is_playing: Arc<Mutex<bool>>) {
             audio_decoder.rate(),
             stream_config.sample_format().as_ffmpeg_sample(),
             audio_decoder.channel_layout(),
-            stream_config.sample_rate().0
-        ).unwrap();
+            stream_config.sample_rate().0,
+        )
+        .unwrap();
 
-        let buffer = RingBuffer::<f32>::new(8192);
-        let (mut producer, mut consumer) = buffer.split();
-
-        let audio_stream = match stream_config.sample_format() {
-            SampleFormat::F32 => device.build_output_stream(&stream_config.into(), move |data: &mut [f32], cbinfo| {
-                write_audio(data, &mut consumer, &cbinfo)
-            }, |err| {
-                eprintln!("audio error: {}", err)
-            }, None),
-            SampleFormat::I16 => panic!("i16 output format unimplemented"),
-            SampleFormat::U16 => panic!("u16 output format unimplemented"),
-            _ => panic!("Other output format unimplemented")
-        }.unwrap();
+        let (mut producer, audio_stream) = match stream_config.sample_format() {
+            SampleFormat::U8 => setup_audio_stream::<u8>(&device, &stream_config.into()).unwrap(),
+            _ => panic!("LOL"),
+        };
 
         let mut receive_and_queue_audio_frames =
             |decoder: &mut ffmpeg::decoder::Audio| -> Result<(), ffmpeg::Error> {
@@ -320,16 +324,45 @@ pub fn packed<T: ffmpeg::frame::audio::Sample>(frame: &Audio) -> &[T] {
         panic!("unsupported type");
     }
 
-    unsafe { std::slice::from_raw_parts((*frame.as_ptr()).data[0] as *const T, frame.samples() * frame.channels() as usize) }
+    unsafe {
+        std::slice::from_raw_parts(
+            (*frame.as_ptr()).data[0] as *const T,
+            frame.samples() * frame.channels() as usize,
+        )
+    }
 }
 
-fn write_audio<T: Sample>(data: &mut [T], samples: &mut ringbuf::Consumer<T>, _: &cpal::OutputCallbackInfo) {
+fn write_audio<T: Sample>(
+    data: &mut [T],
+    samples: &mut ringbuf::Consumer<T>,
+    _: &cpal::OutputCallbackInfo,
+) {
     for d in data {
         // copy as many samples as we have.
         // if we run out, write silence
         match samples.pop() {
             Some(sample) => *d = sample,
-            None => *d = Sample::EQUILIBRIUM
+            None => *d = Sample::EQUILIBRIUM,
         }
     }
+}
+
+fn setup_audio_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+) -> Result<(ringbuf::Producer<T>, cpal::Stream), ffmpeg::Error>
+where
+    T: cpal::SizedSample + cpal::FromSample<u8> + std::marker::Send + 'static,
+{
+    let buffer = RingBuffer::<T>::new(100000);
+    let (producer, mut consumer) = buffer.split();
+    let audio_stream = device
+        .build_output_stream(
+            &config,
+            move |data: &mut [T], cbinfo| write_audio(data, &mut consumer, &cbinfo),
+            |err| eprintln!("audio error: {}", err),
+            None,
+        )
+        .unwrap();
+    Ok((producer, audio_stream))
 }
